@@ -52,11 +52,7 @@ export default class extends Controller {
   addEventListeners() {
     this.canvas.addEventListener("mousedown", this.startDraw.bind(this));
     this.canvas.addEventListener("mousemove", this.drawing.bind(this));
-    this.canvas.addEventListener("mouseup", () => {
-      this.isDrawing = false;
-      // Send Action Cable request here
-      this.sendDrawingAction();
-    });
+    this.canvas.addEventListener("mouseup", () => (this.isDrawing = false));
 
     this.toolBtnTargets.forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -116,11 +112,7 @@ export default class extends Controller {
     this.ctx.lineWidth = this.brushWidth;
     this.ctx.strokeStyle = this.selectedColor;
     this.ctx.fillStyle = this.selectedColor;
-
-    this.lastX = e.offsetX;
-    this.lastY = e.offsetY;
     this.lastSent = Date.now();
-
     this.snapshot = this.ctx.getImageData(
       0,
       0,
@@ -173,7 +165,6 @@ export default class extends Controller {
 
     this.objects.push(rectData); // Push rectangle data into the objects array
 
-    this.ctx.beginPath();
     if (!this.fillColorTarget.checked) {
       this.ctx.strokeRect(
         rectData.x,
@@ -190,8 +181,16 @@ export default class extends Controller {
       );
     }
 
-    this.lastX = rectData.x;
-    this.lastY = rectData.y;
+    // Send drawing action over Action Cable
+    this.drawingChannel.perform("draw", {
+      tool: this.selectedTool,
+      start: { x: rectData.x, y: rectData.y },
+      color: this.selectedColor,
+      brushWidth: this.brushWidth,
+      width: rectData.width,
+      height: rectData.height,
+      fillColorTarget: this.fillColorTarget.checked,
+    });
   }
 
   drawCircle(e) {
@@ -206,9 +205,6 @@ export default class extends Controller {
     } else {
       this.ctx.fill();
     }
-
-    this.lastX = e.offsetX;
-    this.lastY = e.offsetY;
   }
 
   drawTriangle(e) {
@@ -221,46 +217,6 @@ export default class extends Controller {
       this.ctx.stroke();
     } else {
       this.ctx.fill();
-    }
-
-    this.lastX = e.offsetX;
-    this.lastY = e.offsetY;
-  }
-
-  sendDrawingAction() {
-    if (this.selectedTool === "rectangle") {
-      // Send drawing action over Action Cable
-
-      this.drawingChannel.perform("draw", {
-        tool: this.selectedTool,
-        start: { x: this.lastX, y: this.lastY },
-        color: this.selectedColor,
-        brushWidth: this.brushWidth,
-        width: this.prevMouseX - this.lastX,
-        height: this.prevMouseY - this.lastY,
-        fillColorTarget: this.fillColorTarget.checked,
-      });
-    } else if (this.selectedTool === "circle") {
-      let radius = Math.sqrt(
-        Math.pow(this.prevMouseX - this.lastX, 2) +
-          Math.pow(this.prevMouseY - this.lastY, 2)
-      );
-      this.drawingChannel.perform("draw", {
-        tool: this.selectedTool,
-        start: { x: this.prevMouseX, y: this.prevMouseY },
-        color: this.selectedColor,
-        brushWidth: this.brushWidth,
-        radius: radius,
-        fillColorTarget: this.fillColorTarget.checked,
-      });
-    } else if (this.selectedTool === "triangle") {
-      this.drawingChannel.perform("draw", {
-        tool: this.selectedTool,
-        start: { x: this.lastX, y: this.lastY,prevMouseX: this.prevMouseX, prevMouseY: this.prevMouseY },
-        color: this.selectedColor,
-        brushWidth: this.brushWidth,
-        fillColorTarget: this.fillColorTarget.checked,
-      });
     }
   }
 
@@ -281,13 +237,9 @@ export default class extends Controller {
   }
 
   handleActionCableMessage(data) {
-    this.snapshot = this.remoteCtx.getImageData(
-      0,
-      0,
-      this.canvas.width,
-      this.canvas.height
-    );
-    this.remoteCtx.beginPath();
+    this.remoteCtx.lineWidth = data.brushWidth
+      ? data.brushWidth
+      : this.brushWidth;
     switch (data.tool) {
       case "brush":
       case "eraser":
@@ -297,48 +249,15 @@ export default class extends Controller {
         this.remoteCtx.stroke();
         break;
       case "rectangle":
-        if (!data?.fillColorTarget.checked) {
-          this.remoteCtx.strokeRect(
-            data.start.x,
-            data.start.y,
-            data.width,
-            data.height
-          );
+        if (!data.fillColorTarget.checked) {
+          this.remoteCtx.strokeRect(data.start.x, data.start.y, data.width, data.height);
         } else {
-          this.remoteCtx.fillRect(
-            data.start.x,
-            data.start.y,
-            data.width,
-            data.height
-          );
+          this.remoteCtx.fillRect(data.start.x, data.start.y, data.width, data.height);
         }
         break;
       case "circle":
-        this.remoteCtx.beginPath();
-        this.remoteCtx.arc(
-          data.start.x,
-          data.start.y,
-          data.radius,
-          0,
-          2 * Math.PI
-        );
-        if (!data?.fillColorTarget.checked) {
-          this.remoteCtx.stroke();
-        } else {
-          this.remoteCtx.fill();
-        }
         break;
       case "triangle":
-        this.remoteCtx.beginPath();
-        this.remoteCtx.moveTo(this.prevMouseX, this.prevMouseY);
-        this.remoteCtx.lineTo(data.start.x, data.start.y);
-        this.remoteCtx.lineTo(this.prevMouseX * 2 - data.start.x, data.start.y);
-        this.remoteCtx.closePath();
-        if (!data.fillColorTarget.checked) {
-          this.remoteCtx.stroke();
-        } else {
-          this.remoteCtx.fill();
-        }
         break;
       case "clearCanvas":
         this.remoteCtx.clearRect(0, 0, this.canvas.width, this.canvas.height);
